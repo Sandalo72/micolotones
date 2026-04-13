@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
@@ -14,3 +15,7 @@ The React Compiler is not enabled on this template because of its impact on dev 
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+=======
+# micolotones
+App para guardar tus gastos, la app reconocerá facturas y hará un análisis de tus gastos mes a mes, la idea es que no se te vaya el dinero en cosas que no sabes y guardes cualquier gasto para un analisis completo 
+>>>>>>> 36c1013d3703c0ba087bedbf43206cca95e8b8c3
