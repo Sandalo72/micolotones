@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import {
   TrendingUp, TrendingDown, Download, Upload, Plus, Trash2,
-  Briefcase, Plane, User, X, Menu, Award, Camera, Check, Edit2, Loader
+  Briefcase, Plane, User, X, Menu, Award, Camera, Check, Edit2, Loader, Mic, Bell, Calendar
 } from 'lucide-react';
 
 const BudgetTracker = () => {
@@ -24,7 +24,23 @@ const BudgetTracker = () => {
   const [datosMensuales, setDatosMensuales] = useState({});
   const [showAddGasto, setShowAddGasto] = useState(false);
   const [showAddIngreso, setShowAddIngreso] = useState(false);
-  const [vistaActual, setVistaActual] = useState('actual');
+  const [vistaActual, setVistaActual] = useState('actual'); // 'actual', 'comparacion', 'alertas'
+
+  // --- ESTADO PAGOS RECURRENTES ---
+  const [pagosRecurrentes, setPagosRecurrentes] = useState(() => {
+    const guardados = localStorage.getItem(`pagosRecurrentes_${proyectoActual}`);
+    return guardados ? JSON.parse(guardados) : [];
+  });
+  const [nuevoPagoRecurrente, setNuevoPagoRecurrente] = useState({
+    descripcion: '', monto: '', diaDelMes: 1, categoria: 'Servicios'
+  });
+  const [showAddPago, setShowAddPago] = useState(false);
+
+  // --- ESTADO NOTAS DE VOZ ---
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
   // --- ESTADO ESCANEO RECIBO ---
   const [showScanModal, setShowScanModal] = useState(false);
@@ -61,8 +77,18 @@ const BudgetTracker = () => {
   useEffect(() => {
     if (proyectoActual) {
       localStorage.setItem(`budgetData_${proyectoActual}`, JSON.stringify(datosMensuales));
+      localStorage.setItem(`pagosRecurrentes_${proyectoActual}`, JSON.stringify(pagosRecurrentes));
     }
-  }, [datosMensuales, proyectoActual]);
+  }, [datosMensuales, pagosRecurrentes, proyectoActual]);
+
+  useEffect(() => {
+    const pagosGuardados = localStorage.getItem(`pagosRecurrentes_${proyectoActual}`);
+    if (pagosGuardados) {
+      setPagosRecurrentes(JSON.parse(pagosGuardados));
+    } else {
+      setPagosRecurrentes([]);
+    }
+  }, [proyectoActual]);
 
   // --- DATOS ---
   const datosDelMes = datosMensuales[mesActual] || { ingresos: [], gastos: [] };
@@ -100,9 +126,13 @@ const BudgetTracker = () => {
       setImagenRecibo(URL.createObjectURL(file));
 
       // Llamar a Gemini API para analizar el recibo
-      // IMPORTANTE: Necesitas reemplazar esto con tu API Key de Gemini (puedes obtenerla gratis en Google AI Studio)
-      const GEMINI_API_KEY = 'AIzaSyBqQTDhobwykiHz5f3jDZ10UqcnvitReig';
-
+      const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!GEMINI_API_KEY) {
+        alert("Falta configurar la VITE_GEMINI_API_KEY en tu archivo .env local o en Vercel.");
+        setScanLoading(false);
+        return;
+      }
+      
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: {
@@ -173,6 +203,109 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
     }
 
     event.target.value = '';
+  };
+
+  // --- GRABADORA DE VOZ A GASTOS ---
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        procesarAudioConGemini(audioBlob);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error("Error accessing mic:", error);
+      alert("No se pudo acceder al micrófono.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+    }
+  };
+
+  const procesarAudioConGemini = async (audioBlob) => {
+    setVoiceLoading(true);
+    try {
+      const base64Audio = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(audioBlob);
+      });
+
+      const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!GEMINI_API_KEY) {
+        alert("Falta configurar la VITE_GEMINI_API_KEY en tu .env local.");
+        setVoiceLoading(false);
+        return;
+      }
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Aquí hay un audio donde digo un gasto financiero que hice. Extrae la información en formato JSON. Responde SOLO con JSON válido, sin texto adicional ni markdown.
+Formato requerido:
+{
+  "descripcion": "nombre del producto/servicio comprado",
+  "monto": 4000,
+  "categoria": "una de estas: Groceries, Comida, Servicios, Transporte, Entretenimiento, Salud, Educación, Gastos Varios, Insumos, Hospedaje"
+}`
+                },
+                {
+                  inlineData: { mimeType: 'audio/webm', data: base64Audio }
+                }
+              ]
+            }
+          ]
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || 'Error AI');
+      
+      const textoRespuesta = data.candidates[0]?.content?.parts[0]?.text || '{}';
+      const jsonLimpio = textoRespuesta.replace(/```json\n?|\n?```/g, '').trim();
+      const resultado = JSON.parse(jsonLimpio);
+
+      if (resultado.monto && resultado.descripcion) {
+        const nuevo = {
+          id: Date.now(),
+          categoria: resultado.categoria || 'Gastos Varios',
+          descripcion: resultado.descripcion,
+          monto: parseFloat(resultado.monto),
+          fecha: new Date().toLocaleDateString('en-CA')
+        };
+        const gastosActualizados = [...datosDelMes.gastos, nuevo];
+        actualizarDatosMes({ ...datosDelMes, gastos: gastosActualizados });
+        alert(`¡Voz procesada!\nGasto añadido:\n${nuevo.descripcion} - $${nuevo.monto}`);
+      } else {
+         alert("La IA no detectó un gasto en el audio. Intenta de nuevo.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error procesando audio con la Inteligencia Artificial.");
+    }
+    setVoiceLoading(false);
   };
 
   // --- GUARDAR ITEMS ESCANEADOS ---
@@ -548,8 +681,22 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
               <div className="flex bg-white p-1 rounded-xl shadow-sm">
                 <button onClick={() => setVistaActual('actual')} className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium ${vistaActual === 'actual' ? 'bg-orange-100 text-orange-700' : 'text-gray-500'}`}>Dashboard</button>
                 <button onClick={() => setVistaActual('comparacion')} className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium ${vistaActual === 'comparacion' ? 'bg-orange-100 text-orange-700' : 'text-gray-500'}`}>Histórico</button>
+                <button onClick={() => setVistaActual('alertas')} className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium ${vistaActual === 'alertas' ? 'bg-orange-100 text-orange-700' : 'text-gray-500 flex items-center gap-1'} relative`}>
+                  Alertas {pagosRecurrentes.length > 0 && <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full"></span>}
+                </button>
               </div>
               <div className="flex bg-white p-1 rounded-xl shadow-sm">
+                <button 
+                  onMouseDown={startRecording} 
+                  onMouseUp={stopRecording} 
+                  onMouseLeave={stopRecording}
+                  onTouchStart={startRecording}
+                  onTouchEnd={stopRecording}
+                  className={`px-2 sm:px-3 py-2 transition-colors ${isRecording ? 'text-red-500 animate-pulse' : 'text-gray-500 hover:text-red-500'}`} 
+                  title="Mantén presionado para hablar"
+                >
+                  <Mic size={16} className="sm:w-[18px] sm:h-[18px]" />
+                </button>
                 <button onClick={() => imageInputRef.current.click()} className="px-2 sm:px-3 py-2 text-gray-500 hover:text-purple-600" title="Escanear Recibo"><Camera size={16} className="sm:w-[18px] sm:h-[18px]" /></button>
                 <button onClick={() => fileInputRef.current.click()} className="px-2 sm:px-3 py-2 text-gray-500 hover:text-blue-600" title="Importar"><Upload size={16} className="sm:w-[18px] sm:h-[18px]" /></button>
                 <button onClick={exportarAExcel} className="px-2 sm:px-3 py-2 text-gray-500 hover:text-green-600" title="Exportar"><Download size={16} className="sm:w-[18px] sm:h-[18px]" /></button>
@@ -557,7 +704,7 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
             </div>
           </div>
 
-          {vistaActual === 'actual' ? (
+          {vistaActual === 'actual' && (
             <>
               {/* CONTROL MES */}
               <div className="flex justify-between items-center mb-4 sm:mb-6 bg-white p-2 rounded-2xl shadow-sm max-w-sm mx-auto md:mx-0">
@@ -670,7 +817,9 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
                 </div>
               </div>
             </>
-          ) : (
+          )}
+          
+          {vistaActual === 'comparacion' && (
             <div className="space-y-4 sm:space-y-6">
               {/* ESTADÍSTICAS CARDS */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
@@ -751,6 +900,84 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
                     <div className="h-64 flex flex-col items-center justify-center text-gray-300">
                       <span className="text-4xl mb-2">📊</span>
                       <p className="text-sm">Sin datos suficientes</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {vistaActual === 'alertas' && (
+            <div className="space-y-4 sm:space-y-6">
+              <div className="bg-white rounded-xl sm:rounded-2xl p-4 sm:p-5 shadow-sm border border-gray-100">
+                <div className="flex justify-between items-center mb-3 sm:mb-4">
+                  <h3 className="font-bold text-gray-700 flex items-center gap-2 text-sm sm:text-base"><Bell size={18} className="text-orange-500" /> Próximos Pagos & Suscripciones</h3>
+                  <button onClick={() => setShowAddPago(!showAddPago)} className="bg-orange-50 text-orange-600 p-1.5 rounded-lg"><Plus size={16} /></button>
+                </div>
+
+                {showAddPago && (
+                  <div className="bg-orange-50/50 p-3 rounded-xl mb-4 border border-orange-100">
+                    <input type="text" placeholder="Descripción (ej. Netflix, Arriendo)" value={nuevoPagoRecurrente.descripcion} onChange={e => setNuevoPagoRecurrente({...nuevoPagoRecurrente, descripcion: e.target.value})} className="w-full p-2 mb-2 rounded border border-orange-200 text-sm" />
+                    <div className="flex gap-2 mb-2">
+                       <input type="number" placeholder="Monto" value={nuevoPagoRecurrente.monto} onChange={e => setNuevoPagoRecurrente({...nuevoPagoRecurrente, monto: e.target.value})} className="w-1/2 p-2 rounded border border-orange-200 text-sm" />
+                       <div className="w-1/2 flex items-center border border-orange-200 rounded px-2 bg-white text-sm">
+                         <span className="text-gray-400 mr-2">Día:</span>
+                         <input type="number" min="1" max="31" value={nuevoPagoRecurrente.diaDelMes} onChange={e => setNuevoPagoRecurrente({...nuevoPagoRecurrente, diaDelMes: e.target.value})} className="w-full outline-none" />
+                       </div>
+                    </div>
+                    <select value={nuevoPagoRecurrente.categoria} onChange={e => setNuevoPagoRecurrente({ ...nuevoPagoRecurrente, categoria: e.target.value })} className="w-full p-2 mb-2 rounded border border-orange-200 text-sm bg-white mb-2">{categorias.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                    
+                    <button onClick={() => {
+                      if (nuevoPagoRecurrente.descripcion && nuevoPagoRecurrente.monto && nuevoPagoRecurrente.diaDelMes) {
+                        const nuevoId = Date.now().toString();
+                        setPagosRecurrentes([...pagosRecurrentes, { ...nuevoPagoRecurrente, id: nuevoId, monto: parseFloat(nuevoPagoRecurrente.monto), diaDelMes: parseInt(nuevoPagoRecurrente.diaDelMes) }]);
+                        setNuevoPagoRecurrente({ descripcion: '', monto: '', diaDelMes: 1, categoria: 'Servicios' });
+                        setShowAddPago(false);
+                      }
+                    }} className="w-full bg-orange-500 text-white py-2 rounded-lg text-sm font-bold">Agregar Alerta</button>
+                  </div>
+                )}
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  {pagosRecurrentes.map(pago => {
+                    const hoy = new Date().getDate();
+                    const faltan = pago.diaDelMes - hoy;
+                    const esInminente = faltan >= 0 && faltan <= 5;
+                    const yaPaso = faltan < 0;
+                    
+                    return (
+                      <div key={pago.id} className={`p-4 rounded-xl border-l-4 shadow-sm flex flex-col gap-2 relative ${esInminente ? 'bg-red-50 border-red-500' : yaPaso ? 'bg-gray-50 border-gray-300' : 'bg-blue-50 border-blue-400'}`}>
+                        <button onClick={() => setPagosRecurrentes(pagosRecurrentes.filter(p => p.id !== pago.id))} className="absolute top-2 right-2 text-gray-400 hover:text-red-500"><X size={14}/></button>
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-gray-500 px-2 bg-white rounded-full">{pago.categoria}</span>
+                            <h4 className="font-bold text-slate-800 mt-1">{pago.descripcion}</h4>
+                          </div>
+                          <span className="font-bold text-slate-700">${pago.monto.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between items-end mt-2">
+                          <div className="flex items-center gap-1 text-sm">
+                            <Calendar size={14} className="text-gray-500" />
+                            <span className={esInminente ? 'text-red-600 font-bold' : 'text-gray-600'}>Día {pago.diaDelMes}</span>
+                            {esInminente && <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded animate-pulse">¡Vence pronto!</span>}
+                          </div>
+                          
+                          <button onClick={() => {
+                            const gastoAgregado = { id: Date.now(), categoria: pago.categoria, descripcion: pago.descripcion, monto: pago.monto, fecha: new Date().toLocaleDateString('en-CA') };
+                            actualizarDatosMes({ ...datosDelMes, gastos: [...datosDelMes.gastos, gastoAgregado] });
+                            alert(`Gasto automático de $${pago.monto} añadido hoy.`);
+                          }} className="text-xs bg-white border border-gray-200 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors px-3 py-1.5 rounded-lg flex items-center gap-1">
+                            <Check size={12} /> Marcar Pagado hoy
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  
+                  {pagosRecurrentes.length === 0 && (
+                    <div className="col-span-2 py-10 text-center text-gray-400">
+                      <Bell size={32} className="mx-auto mb-2 opacity-50" />
+                      <p>No tienes pagos recurrentes programados.<br/>¡Añade uno para que te avisemos!</p>
                     </div>
                   )}
                 </div>
