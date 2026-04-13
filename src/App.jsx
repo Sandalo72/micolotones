@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import {
   TrendingUp, TrendingDown, Download, Upload, Plus, Trash2,
-  Briefcase, Plane, User, X, Menu, Award
+  Briefcase, Plane, User, X, Menu, Award, Camera, Check, Edit2, Loader
 } from 'lucide-react';
 
 const BudgetTracker = () => {
@@ -17,6 +17,7 @@ const BudgetTracker = () => {
   const [nuevoProyectoNombre, setNuevoProyectoNombre] = useState('');
   const [showAddProyecto, setShowAddProyecto] = useState(false);
   const fileInputRef = useRef(null);
+  const imageInputRef = useRef(null);
 
   // --- ESTADO DEL PROYECTO ACTUAL ---
   const [mesActual, setMesActual] = useState(new Date().toLocaleDateString('en-CA').slice(0, 7));
@@ -24,6 +25,12 @@ const BudgetTracker = () => {
   const [showAddGasto, setShowAddGasto] = useState(false);
   const [showAddIngreso, setShowAddIngreso] = useState(false);
   const [vistaActual, setVistaActual] = useState('actual');
+
+  // --- ESTADO ESCANEO RECIBO ---
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [itemsEscaneados, setItemsEscaneados] = useState([]);
+  const [imagenRecibo, setImagenRecibo] = useState(null);
 
   const [nuevoGasto, setNuevoGasto] = useState({
     categoria: 'Groceries', monto: '', descripcion: '', fecha: new Date().toLocaleDateString('en-CA')
@@ -72,6 +79,128 @@ const BudgetTracker = () => {
     name: cat,
     value: datosDelMes.gastos.filter(g => g.categoria === cat).reduce((sum, g) => sum + g.monto, 0)
   })).filter(item => item.value > 0);
+
+  // --- ESCANEAR RECIBO CON IA ---
+  const procesarImagenRecibo = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setScanLoading(true);
+    setShowScanModal(true);
+
+    try {
+      // Convertir imagen a base64
+      const base64Image = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      setImagenRecibo(URL.createObjectURL(file));
+
+      // Llamar a Claude API para analizar el recibo
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: file.type,
+                    data: base64Image
+                  }
+                },
+                {
+                  type: 'text',
+                  text: `Analiza este recibo y extrae la información en formato JSON. Responde SOLO con JSON válido, sin texto adicional ni markdown.
+
+Formato requerido:
+{
+  "nombreLocal": "nombre del establecimiento",
+  "fecha": "YYYY-MM-DD (si está visible, sino usa la fecha de hoy)",
+  "items": [
+    {
+      "descripcion": "nombre del producto",
+      "monto": precio_numerico,
+      "categoria": "una de estas: Groceries, Comida, Servicios, Transporte, Entretenimiento, Salud, Educación, Gastos Varios, Insumos, Hospedaje"
+    }
+  ]
+}
+
+Si hay un total general, ignóralo y solo extrae los items individuales. Categoriza inteligentemente según el producto.`
+                }
+              ]
+            }
+          ]
+        })
+      });
+
+      const data = await response.json();
+      const textoRespuesta = data.content.find(c => c.type === 'text')?.text || '{}';
+
+      // Limpiar posibles backticks de markdown
+      const jsonLimpio = textoRespuesta.replace(/```json\n?|\n?```/g, '').trim();
+      const resultado = JSON.parse(jsonLimpio);
+
+      // Agregar IDs temporales a los items
+      const itemsConId = resultado.items.map((item, idx) => ({
+        ...item,
+        id: `temp-${Date.now()}-${idx}`,
+        fecha: resultado.fecha || new Date().toLocaleDateString('en-CA'),
+        editable: true
+      }));
+
+      setItemsEscaneados(itemsConId);
+      setScanLoading(false);
+
+    } catch (error) {
+      console.error('Error al escanear recibo:', error);
+      alert('Error al procesar el recibo. Intenta con mejor iluminación o una foto más clara.');
+      setScanLoading(false);
+      setShowScanModal(false);
+    }
+
+    event.target.value = '';
+  };
+
+  // --- GUARDAR ITEMS ESCANEADOS ---
+  const guardarItemsEscaneados = () => {
+    const nuevosGastos = itemsEscaneados.map(item => ({
+      id: Date.now() + Math.random(),
+      categoria: item.categoria,
+      descripcion: item.descripcion,
+      monto: parseFloat(item.monto),
+      fecha: item.fecha
+    }));
+
+    const gastosActualizados = [...datosDelMes.gastos, ...nuevosGastos];
+    actualizarDatosMes({ ...datosDelMes, gastos: gastosActualizados });
+
+    setShowScanModal(false);
+    setItemsEscaneados([]);
+    setImagenRecibo(null);
+  };
+
+  // --- EDITAR ITEM ESCANEADO ---
+  const editarItemEscaneado = (id, campo, valor) => {
+    setItemsEscaneados(itemsEscaneados.map(item =>
+      item.id === id ? { ...item, [campo]: valor } : item
+    ));
+  };
+
+  const eliminarItemEscaneado = (id) => {
+    setItemsEscaneados(itemsEscaneados.filter(item => item.id !== id));
+  };
 
   // --- IMPORTAR INTELIGENTE ---
   const importarDesdeCSV = (event) => {
@@ -207,7 +336,6 @@ const BudgetTracker = () => {
     });
   };
 
-  // --- NUEVAS FUNCIONES PARA HISTÓRICO MEJORADO ---
   const obtenerTendenciaBalance = () => {
     return Object.keys(datosMensuales).sort().slice(-6).map(mes => {
       const d = datosMensuales[mes];
@@ -261,6 +389,112 @@ const BudgetTracker = () => {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row font-sans">
       <input type="file" accept=".csv" ref={fileInputRef} onChange={importarDesdeCSV} className="hidden" />
+      <input type="file" accept="image/*" ref={imageInputRef} onChange={procesarImagenRecibo} className="hidden" />
+
+      {/* MODAL ESCANEO RECIBO */}
+      {showScanModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-pink-500 to-orange-500 p-4 sm:p-6 flex justify-between items-center rounded-t-2xl">
+              <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center gap-2">
+                <Camera size={24} />
+                Escaneo de Recibo
+              </h2>
+              <button onClick={() => { setShowScanModal(false); setItemsEscaneados([]); setImagenRecibo(null); }} className="text-white hover:bg-white/20 p-2 rounded-lg">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-6">
+              {scanLoading ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <Loader className="animate-spin text-orange-500 mb-4" size={48} />
+                  <p className="text-gray-600 text-lg">Analizando recibo con IA...</p>
+                  <p className="text-gray-400 text-sm mt-2">Esto puede tomar unos segundos</p>
+                </div>
+              ) : (
+                <>
+                  {imagenRecibo && (
+                    <div className="mb-6">
+                      <img src={imagenRecibo} alt="Recibo" className="max-h-64 mx-auto rounded-lg shadow-md" />
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {itemsEscaneados.map(item => (
+                      <div key={item.id} className="bg-gray-50 rounded-xl p-4 border-2 border-gray-200 hover:border-orange-300 transition-all">
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                          <div className="sm:col-span-2">
+                            <label className="text-xs text-gray-500 mb-1 block">Descripción</label>
+                            <input
+                              type="text"
+                              value={item.descripcion}
+                              onChange={(e) => editarItemEscaneado(item.id, 'descripcion', e.target.value)}
+                              className="w-full p-2 rounded border border-gray-300 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 mb-1 block">Monto</label>
+                            <input
+                              type="number"
+                              value={item.monto}
+                              onChange={(e) => editarItemEscaneado(item.id, 'monto', e.target.value)}
+                              className="w-full p-2 rounded border border-gray-300 text-sm"
+                            />
+                          </div>
+                          <div className="flex items-end gap-2">
+                            <div className="flex-1">
+                              <label className="text-xs text-gray-500 mb-1 block">Categoría</label>
+                              <select
+                                value={item.categoria}
+                                onChange={(e) => editarItemEscaneado(item.id, 'categoria', e.target.value)}
+                                className="w-full p-2 rounded border border-gray-300 text-sm bg-white"
+                              >
+                                {categorias.map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </div>
+                            <button
+                              onClick={() => eliminarItemEscaneado(item.id)}
+                              className="p-2 text-red-500 hover:bg-red-50 rounded-lg"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {itemsEscaneados.length > 0 && (
+                    <div className="mt-6 flex gap-3">
+                      <button
+                        onClick={guardarItemsEscaneados}
+                        className="flex-1 bg-gradient-to-r from-pink-500 to-orange-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg transition-all"
+                      >
+                        <Check size={20} />
+                        Guardar {itemsEscaneados.length} item{itemsEscaneados.length > 1 ? 's' : ''}
+                      </button>
+                      <button
+                        onClick={() => { setShowScanModal(false); setItemsEscaneados([]); setImagenRecibo(null); }}
+                        className="px-6 bg-gray-200 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-300"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  )}
+
+                  {itemsEscaneados.length === 0 && !scanLoading && (
+                    <div className="text-center py-12 text-gray-400">
+                      <Camera size={48} className="mx-auto mb-4 opacity-50" />
+                      <p>No se detectaron items</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SIDEBAR */}
       <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform ${showMenu ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 shadow-2xl flex flex-col`}>
@@ -314,6 +548,7 @@ const BudgetTracker = () => {
                 <button onClick={() => setVistaActual('comparacion')} className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium ${vistaActual === 'comparacion' ? 'bg-orange-100 text-orange-700' : 'text-gray-500'}`}>Histórico</button>
               </div>
               <div className="flex bg-white p-1 rounded-xl shadow-sm">
+                <button onClick={() => imageInputRef.current.click()} className="px-2 sm:px-3 py-2 text-gray-500 hover:text-purple-600" title="Escanear Recibo"><Camera size={16} className="sm:w-[18px] sm:h-[18px]" /></button>
                 <button onClick={() => fileInputRef.current.click()} className="px-2 sm:px-3 py-2 text-gray-500 hover:text-blue-600" title="Importar"><Upload size={16} className="sm:w-[18px] sm:h-[18px]" /></button>
                 <button onClick={exportarAExcel} className="px-2 sm:px-3 py-2 text-gray-500 hover:text-green-600" title="Exportar"><Download size={16} className="sm:w-[18px] sm:h-[18px]" /></button>
               </div>
@@ -418,7 +653,7 @@ const BudgetTracker = () => {
                             <Pie data={gastosPorCategoria} cx="50%" cy="50%" innerRadius={50} outerRadius={70} paddingAngle={5} dataKey="value">
                               {gastosPorCategoria.map((entry, index) => <Cell key={`cell-${index}`} fill={colores[index % colores.length]} />)}
                             </Pie>
-                            <Tooltip formatter={(value) => `${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontSize: '12px' }} />
+                            <Tooltip formatter={(value) => `$${value.toLocaleString()}`} contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontSize: '12px' }} />
                             <Legend layout="horizontal" verticalAlign="bottom" align="center" wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
                           </PieChart>
                         </ResponsiveContainer>
@@ -460,7 +695,7 @@ const BudgetTracker = () => {
                 </div>
               </div>
 
-              {/* GRÁFICA BARRAS: Ingresos vs Gastos */}
+              {/* GRÁFICA BARRAS */}
               <div className="bg-white rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-md">
                 <h3 className="font-bold text-gray-700 mb-4 text-sm sm:text-base">Evolución Semestral</h3>
                 <div className="h-64 sm:h-80">
@@ -479,7 +714,7 @@ const BudgetTracker = () => {
               </div>
 
               <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
-                {/* GRÁFICA LÍNEA: Tendencia Balance */}
+                {/* TENDENCIA BALANCE */}
                 <div className="bg-white rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-md">
                   <h3 className="font-bold text-gray-700 mb-4 text-sm sm:text-base">Tendencia del Balance</h3>
                   <div className="h-64">
