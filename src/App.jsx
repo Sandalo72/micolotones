@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import {
   TrendingUp, TrendingDown, Download, Upload, Plus, Trash2,
-  Briefcase, Plane, User, X, Menu, Award, Camera, Check, Edit2, Loader, Mic, Bell, Calendar
+  Briefcase, Plane, User, X, Menu, Award, Camera, Check, Edit2, Loader, Mic, MicOff, Bell, Calendar, Square
 } from 'lucide-react';
 
 const BudgetTracker = () => {
@@ -37,10 +37,13 @@ const BudgetTracker = () => {
   const [showAddPago, setShowAddPago] = useState(false);
 
   // --- ESTADO NOTAS DE VOZ ---
+  const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const recordingTimerRef = useRef(null);
 
   // --- ESTADO ESCANEO RECIBO ---
   const [showScanModal, setShowScanModal] = useState(false);
@@ -206,7 +209,22 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
   };
 
   // --- GRABADORA DE VOZ A GASTOS ---
-  const startRecording = async () => {
+  const abrirGrabadora = () => {
+    setShowVoiceModal(true);
+    setRecordingSeconds(0);
+    setVoiceLoading(false);
+  };
+
+  const cerrarGrabadora = () => {
+    if (isRecording) {
+      detenerGrabacion(true); // cancelar sin procesar
+    }
+    setShowVoiceModal(false);
+    setRecordingSeconds(0);
+    setVoiceLoading(false);
+  };
+
+  const iniciarGrabacion = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -217,25 +235,50 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
 
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        procesarAudioConGemini(audioBlob);
+      mediaRecorder.onstop = () => {
+        // El procesamiento se dispara desde detenerGrabacion
       };
 
       mediaRecorder.start();
       setIsRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(prev => prev + 1);
+      }, 1000);
     } catch (error) {
       console.error("Error accessing mic:", error);
-      alert("No se pudo acceder al micrófono.");
+      alert("No se pudo acceder al micrófono. Verifica los permisos del navegador.");
     }
   };
 
-  const stopRecording = () => {
+  const detenerGrabacion = (cancelar = false) => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+
+      if (!cancelar) {
+        // Esperar a que se recopilen los chunks y luego procesar
+        setTimeout(() => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          if (audioBlob.size > 0) {
+            procesarAudioConGemini(audioBlob);
+          } else {
+            alert("No se capturó audio. Intenta de nuevo.");
+          }
+        }, 300);
+      }
     }
+  };
+
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
   };
 
   const procesarAudioConGemini = async (audioBlob) => {
@@ -263,13 +306,22 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
             {
               parts: [
                 {
-                  text: `Aquí hay un audio donde digo un gasto financiero que hice. Extrae la información en formato JSON. Responde SOLO con JSON válido, sin texto adicional ni markdown.
+                  text: `Escucha atentamente este audio. El idioma del audio es español de Latinoamérica (Colombia). La persona está describiendo un gasto o compra que realizó. Interpreta lo que dice aunque la pronunciación no sea perfecta.
+
+Extrae la información del gasto en formato JSON. Responde ÚNICAMENTE con JSON válido, sin texto adicional, sin markdown, sin backticks.
+
 Formato requerido:
 {
-  "descripcion": "nombre del producto/servicio comprado",
+  "descripcion": "nombre claro del producto o servicio comprado",
   "monto": 4000,
-  "categoria": "una de estas: Groceries, Comida, Servicios, Transporte, Entretenimiento, Salud, Educación, Gastos Varios, Insumos, Hospedaje"
-}`
+  "categoria": "una de estas exactamente: Groceries, Comida, Servicios, Transporte, Entretenimiento, Salud, Educación, Gastos Varios, Insumos, Hospedaje"
+}
+
+Notas:
+- "monto" debe ser un número sin formato, sin puntos ni comas (ej: 4000, no "4.000")
+- Si la persona dice "mil" o "luca", interpreta como 1000
+- Si dice "cuatro mil" es 4000, "diez mil" es 10000, etc.
+- Categoriza de forma inteligente según el contexto`
                 },
                 {
                   inlineData: { mimeType: 'audio/webm', data: base64Audio }
@@ -297,13 +349,15 @@ Formato requerido:
         };
         const gastosActualizados = [...datosDelMes.gastos, nuevo];
         actualizarDatosMes({ ...datosDelMes, gastos: gastosActualizados });
-        alert(`¡Voz procesada!\nGasto añadido:\n${nuevo.descripcion} - $${nuevo.monto}`);
+        setShowVoiceModal(false);
+        setRecordingSeconds(0);
+        alert(`✅ ¡Gasto añadido por voz!\n\n📝 ${nuevo.descripcion}\n💰 $${nuevo.monto.toLocaleString()}\n📂 ${nuevo.categoria}`);
       } else {
-         alert("La IA no detectó un gasto en el audio. Intenta de nuevo.");
+         alert("La IA no detectó un gasto en el audio. Intenta hablar más claro.");
       }
     } catch (err) {
       console.error(err);
-      alert("Error procesando audio con la Inteligencia Artificial.");
+      alert("Error procesando audio. Intenta de nuevo.");
     }
     setVoiceLoading(false);
   };
@@ -631,6 +685,87 @@ Formato requerido:
         </div>
       )}
 
+      {/* MODAL GRABADORA DE VOZ */}
+      {showVoiceModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden">
+            <div className="bg-gradient-to-r from-red-500 to-pink-500 p-5 flex justify-between items-center">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <Mic size={22} /> Gasto por Voz
+              </h2>
+              <button onClick={cerrarGrabadora} className="text-white/80 hover:text-white hover:bg-white/20 p-2 rounded-lg transition-colors">
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="p-6 flex flex-col items-center">
+              {voiceLoading ? (
+                <div className="flex flex-col items-center py-8">
+                  <Loader className="animate-spin text-pink-500 mb-4" size={48} />
+                  <p className="text-gray-700 font-semibold text-lg">Analizando audio con IA...</p>
+                  <p className="text-gray-400 text-sm mt-1">Procesando tu mensaje de voz</p>
+                </div>
+              ) : (
+                <>
+                  {/* Animación de ondas */}
+                  <div className="relative w-32 h-32 mb-6 flex items-center justify-center">
+                    {isRecording && (
+                      <>
+                        <div className="absolute w-32 h-32 rounded-full bg-red-100 animate-ping opacity-30"></div>
+                        <div className="absolute w-24 h-24 rounded-full bg-red-200 animate-ping opacity-40" style={{animationDelay: '0.3s'}}></div>
+                        <div className="absolute w-16 h-16 rounded-full bg-red-300 animate-ping opacity-50" style={{animationDelay: '0.6s'}}></div>
+                      </>
+                    )}
+                    <div className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 ${isRecording ? 'bg-red-500 scale-110' : 'bg-gray-200'}`}>
+                      {isRecording ? <Mic size={32} className="text-white" /> : <Mic size={32} className="text-gray-500" />}
+                    </div>
+                  </div>
+
+                  {/* Timer */}
+                  {isRecording && (
+                    <div className="text-3xl font-mono font-bold text-red-500 mb-2 tabular-nums">
+                      {formatTime(recordingSeconds)}
+                    </div>
+                  )}
+
+                  <p className="text-gray-500 text-sm text-center mb-6 max-w-xs">
+                    {isRecording 
+                      ? 'Grabando... Habla claro y describe tu gasto. Presiona "Detener" cuando termines.' 
+                      : 'Presiona "Grabar" y di algo como: "Compré empanadas por 4 mil pesos"'
+                    }
+                  </p>
+
+                  {/* Botones */}
+                  <div className="flex gap-3 w-full">
+                    {!isRecording ? (
+                      <button
+                        onClick={iniciarGrabacion}
+                        className="flex-1 bg-gradient-to-r from-red-500 to-pink-500 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:scale-[1.02] transition-all text-sm"
+                      >
+                        <Mic size={20} /> Grabar
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => detenerGrabacion(false)}
+                        className="flex-1 bg-gradient-to-r from-slate-700 to-slate-800 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:scale-[1.02] transition-all text-sm"
+                      >
+                        <Square size={18} /> Detener y Analizar
+                      </button>
+                    )}
+                    <button
+                      onClick={cerrarGrabadora}
+                      className="px-5 bg-gray-100 text-gray-600 py-3.5 rounded-xl font-bold hover:bg-gray-200 transition-colors text-sm"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SIDEBAR */}
       <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform ${showMenu ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 shadow-2xl flex flex-col`}>
         <div className="p-4 sm:p-6 flex justify-between items-center bg-slate-800">
@@ -687,13 +822,9 @@ Formato requerido:
               </div>
               <div className="flex bg-white p-1 rounded-xl shadow-sm">
                 <button 
-                  onMouseDown={startRecording} 
-                  onMouseUp={stopRecording} 
-                  onMouseLeave={stopRecording}
-                  onTouchStart={startRecording}
-                  onTouchEnd={stopRecording}
-                  className={`px-2 sm:px-3 py-2 transition-colors ${isRecording ? 'text-red-500 animate-pulse' : 'text-gray-500 hover:text-red-500'}`} 
-                  title="Mantén presionado para hablar"
+                  onClick={abrirGrabadora}
+                  className="px-2 sm:px-3 py-2 text-gray-500 hover:text-red-500 transition-colors" 
+                  title="Grabar gasto con voz"
                 >
                   <Mic size={16} className="sm:w-[18px] sm:h-[18px]" />
                 </button>
