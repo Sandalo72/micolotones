@@ -99,29 +99,20 @@ const BudgetTracker = () => {
 
       setImagenRecibo(URL.createObjectURL(file));
 
-      // Llamar a Claude API para analizar el recibo
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      // Llamar a Gemini API para analizar el recibo
+      // IMPORTANTE: Necesitas reemplazar esto con tu API Key de Gemini (puedes obtenerla gratis en Google AI Studio)
+      const GEMINI_API_KEY = 'AIzaSyBqQTDhobwykiHz5f3jDZ10UqcnvitReig';
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [
+          contents: [
             {
-              role: 'user',
-              content: [
+              parts: [
                 {
-                  type: 'image',
-                  source: {
-                    type: 'base64',
-                    media_type: file.type,
-                    data: base64Image
-                  }
-                },
-                {
-                  type: 'text',
                   text: `Analiza este recibo y extrae la información en formato JSON. Responde SOLO con JSON válido, sin texto adicional ni markdown.
 
 Formato requerido:
@@ -138,6 +129,12 @@ Formato requerido:
 }
 
 Si hay un total general, ignóralo y solo extrae los items individuales. Categoriza inteligentemente según el producto.`
+                },
+                {
+                  inlineData: {
+                    mimeType: file.type,
+                    data: base64Image
+                  }
                 }
               ]
             }
@@ -146,7 +143,12 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
       });
 
       const data = await response.json();
-      const textoRespuesta = data.content.find(c => c.type === 'text')?.text || '{}';
+
+      if (!response.ok) {
+        throw new Error(data.error?.message || 'Error en la API de Gemini');
+      }
+
+      const textoRespuesta = data.candidates[0]?.content?.parts[0]?.text || '{}';
 
       // Limpiar posibles backticks de markdown
       const jsonLimpio = textoRespuesta.replace(/```json\n?|\n?```/g, '').trim();
