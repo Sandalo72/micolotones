@@ -40,6 +40,8 @@ const BudgetTracker = () => {
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
+  const [voiceSuccess, setVoiceSuccess] = useState(null); // { descripcion, monto, categoria }
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -213,15 +215,19 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
     setShowVoiceModal(true);
     setRecordingSeconds(0);
     setVoiceLoading(false);
+    setVoiceError('');
+    setVoiceSuccess(null);
   };
 
   const cerrarGrabadora = () => {
     if (isRecording) {
-      detenerGrabacion(true); // cancelar sin procesar
+      detenerGrabacion(true);
     }
     setShowVoiceModal(false);
     setRecordingSeconds(0);
     setVoiceLoading(false);
+    setVoiceError('');
+    setVoiceSuccess(null);
   };
 
   const iniciarGrabacion = async () => {
@@ -247,7 +253,7 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
       }, 1000);
     } catch (error) {
       console.error("Error accessing mic:", error);
-      alert("No se pudo acceder al micrófono. Verifica los permisos del navegador.");
+      setVoiceError('No se pudo acceder al micrófono. Verifica los permisos del navegador.');
     }
   };
 
@@ -262,13 +268,12 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
       mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
 
       if (!cancelar) {
-        // Esperar a que se recopilen los chunks y luego procesar
         setTimeout(() => {
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
           if (audioBlob.size > 0) {
             procesarAudioConGemini(audioBlob);
           } else {
-            alert("No se capturó audio. Intenta de nuevo.");
+            setVoiceError('No se capturó audio. Intenta de nuevo.');
           }
         }, 300);
       }
@@ -293,7 +298,7 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
 
       const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
       if (!GEMINI_API_KEY) {
-        alert("Falta configurar la VITE_GEMINI_API_KEY en tu .env local.");
+        setVoiceError('La API Key de Gemini no está configurada. Contacta al administrador.');
         setVoiceLoading(false);
         return;
       }
@@ -349,15 +354,13 @@ Notas:
         };
         const gastosActualizados = [...datosDelMes.gastos, nuevo];
         actualizarDatosMes({ ...datosDelMes, gastos: gastosActualizados });
-        setShowVoiceModal(false);
-        setRecordingSeconds(0);
-        alert(`✅ ¡Gasto añadido por voz!\n\n📝 ${nuevo.descripcion}\n💰 $${nuevo.monto.toLocaleString()}\n📂 ${nuevo.categoria}`);
+        setVoiceSuccess(nuevo); // Mostrar resumen en el modal
       } else {
-         alert("La IA no detectó un gasto en el audio. Intenta hablar más claro.");
+        setVoiceError('La IA no detectó un gasto claro. Intenta hablar más despacio y claro.');
       }
     } catch (err) {
       console.error(err);
-      alert("Error procesando audio. Intenta de nuevo.");
+      setVoiceError('Ocurrió un error procesando el audio. Intenta de nuevo.');
     }
     setVoiceLoading(false);
   };
@@ -699,7 +702,38 @@ Notas:
             </div>
 
             <div className="p-6 flex flex-col items-center">
-              {voiceLoading ? (
+              {voiceSuccess ? (
+                /* --- VISTA ÉXITO --- */
+                <div className="flex flex-col items-center w-full py-4">
+                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mb-4">
+                    <Check size={32} className="text-emerald-600" />
+                  </div>
+                  <h3 className="text-lg font-bold text-gray-800 mb-4">¡Gasto añadido!</h3>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 w-full space-y-2 mb-6">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">Descripción</span>
+                      <span className="font-semibold text-gray-800">{voiceSuccess.descripcion}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">Monto</span>
+                      <span className="font-bold text-emerald-600 text-lg">${voiceSuccess.monto.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">Categoría</span>
+                      <span className="text-xs font-bold uppercase bg-orange-100 text-orange-600 px-2 py-1 rounded">{voiceSuccess.categoria}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-3 w-full">
+                    <button onClick={abrirGrabadora} className="flex-1 bg-gradient-to-r from-red-500 to-pink-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm hover:shadow-lg transition-all">
+                      <Mic size={18} /> Grabar otro
+                    </button>
+                    <button onClick={cerrarGrabadora} className="flex-1 bg-gray-100 text-gray-600 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors text-sm">
+                      Cerrar
+                    </button>
+                  </div>
+                </div>
+              ) : voiceLoading ? (
+                /* --- VISTA CARGANDO --- */
                 <div className="flex flex-col items-center py-8">
                   <Loader className="animate-spin text-pink-500 mb-4" size={48} />
                   <p className="text-gray-700 font-semibold text-lg">Analizando audio con IA...</p>
@@ -707,6 +741,13 @@ Notas:
                 </div>
               ) : (
                 <>
+                  {/* --- VISTA ERROR --- */}
+                  {voiceError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 mb-4 w-full text-sm text-center">
+                      ⚠️ {voiceError}
+                    </div>
+                  )}
+
                   {/* Animación de ondas */}
                   <div className="relative w-32 h-32 mb-6 flex items-center justify-center">
                     {isRecording && (
@@ -739,7 +780,7 @@ Notas:
                   <div className="flex gap-3 w-full">
                     {!isRecording ? (
                       <button
-                        onClick={iniciarGrabacion}
+                        onClick={() => { setVoiceError(''); iniciarGrabacion(); }}
                         className="flex-1 bg-gradient-to-r from-red-500 to-pink-500 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:scale-[1.02] transition-all text-sm"
                       >
                         <Mic size={20} /> Grabar
