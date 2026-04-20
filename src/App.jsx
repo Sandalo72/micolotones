@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import {
   TrendingUp, TrendingDown, Download, Upload, Plus, Trash2,
-  Briefcase, Plane, User, X, Menu, Award, Camera, Check, Edit2, Loader, Mic, MicOff, Bell, Calendar, Square
+  Briefcase, Plane, User, X, Menu, Award, Camera, Check, Loader, Mic, Bell, Calendar, Square
 } from 'lucide-react';
 
 const BudgetTracker = () => {
@@ -69,6 +69,7 @@ const BudgetTracker = () => {
     localStorage.setItem('micolotones_proyectos', JSON.stringify(proyectos));
   }, [proyectos]);
 
+  // Cargar datos cuando cambia el proyecto activo
   useEffect(() => {
     const datosGuardados = localStorage.getItem(`budgetData_${proyectoActual}`);
     if (datosGuardados) {
@@ -76,24 +77,22 @@ const BudgetTracker = () => {
     } else {
       setDatosMensuales({});
     }
-    setMesActual(new Date().toLocaleDateString('en-CA').slice(0, 7));
-  }, [proyectoActual]);
-
-  useEffect(() => {
-    if (proyectoActual) {
-      localStorage.setItem(`budgetData_${proyectoActual}`, JSON.stringify(datosMensuales));
-      localStorage.setItem(`pagosRecurrentes_${proyectoActual}`, JSON.stringify(pagosRecurrentes));
-    }
-  }, [datosMensuales, pagosRecurrentes, proyectoActual]);
-
-  useEffect(() => {
     const pagosGuardados = localStorage.getItem(`pagosRecurrentes_${proyectoActual}`);
     if (pagosGuardados) {
       setPagosRecurrentes(JSON.parse(pagosGuardados));
     } else {
       setPagosRecurrentes([]);
     }
+    setMesActual(new Date().toLocaleDateString('en-CA').slice(0, 7));
   }, [proyectoActual]);
+
+  // Guardar datos cuando cambian
+  useEffect(() => {
+    if (proyectoActual) {
+      localStorage.setItem(`budgetData_${proyectoActual}`, JSON.stringify(datosMensuales));
+      localStorage.setItem(`pagosRecurrentes_${proyectoActual}`, JSON.stringify(pagosRecurrentes));
+    }
+  }, [datosMensuales, pagosRecurrentes, proyectoActual]);
 
   // --- DATOS ---
   const datosDelMes = datosMensuales[mesActual] || { ingresos: [], gastos: [] };
@@ -108,7 +107,7 @@ const BudgetTracker = () => {
 
   const gastosPorCategoria = categorias.map(cat => ({
     name: cat,
-    value: datosDelMes.gastos.filter(g => g.categoria === cat).reduce((sum, g) => sum + g.monto, 0)
+    value: (datosDelMes.gastos || []).filter(g => g.categoria === cat).reduce((sum, g) => sum + g.monto, 0)
   })).filter(item => item.value > 0);
 
   // --- ESCANEAR RECIBO CON IA ---
@@ -1097,7 +1096,7 @@ Notas:
                          <input type="number" min="1" max="31" value={nuevoPagoRecurrente.diaDelMes} onChange={e => setNuevoPagoRecurrente({...nuevoPagoRecurrente, diaDelMes: e.target.value})} className="w-full outline-none" />
                        </div>
                     </div>
-                    <select value={nuevoPagoRecurrente.categoria} onChange={e => setNuevoPagoRecurrente({ ...nuevoPagoRecurrente, categoria: e.target.value })} className="w-full p-2 mb-2 rounded border border-orange-200 text-sm bg-white mb-2">{categorias.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                    <select value={nuevoPagoRecurrente.categoria} onChange={e => setNuevoPagoRecurrente({ ...nuevoPagoRecurrente, categoria: e.target.value })} className="w-full p-2 mb-2 rounded border border-orange-200 text-sm bg-white">{categorias.map(c => <option key={c} value={c}>{c}</option>)}</select>
                     
                     <button onClick={() => {
                       if (nuevoPagoRecurrente.descripcion && nuevoPagoRecurrente.monto && nuevoPagoRecurrente.diaDelMes) {
