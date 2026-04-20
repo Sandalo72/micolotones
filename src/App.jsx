@@ -137,7 +137,7 @@ const BudgetTracker = () => {
         return;
       }
       
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -188,6 +188,13 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
       const jsonLimpio = textoRespuesta.replace(/```json\n?|\n?```/g, '').trim();
       const resultado = JSON.parse(jsonLimpio);
 
+      if (!resultado.items || resultado.items.length === 0) {
+        alert('La IA no detectó items en el recibo. Intenta con una foto más clara y con buena iluminación.');
+        setScanLoading(false);
+        event.target.value = '';
+        return;
+      }
+
       // Agregar IDs temporales a los items
       const itemsConId = resultado.items.map((item, idx) => ({
         ...item,
@@ -201,9 +208,11 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
 
     } catch (error) {
       console.error('Error al escanear recibo:', error);
-      alert('Error al procesar el recibo. Intenta con mejor iluminación o una foto más clara.');
+      // Mostrar error real para facilitar diagnóstico
+      const mensajeError = error?.message || String(error);
+      alert(`Error al procesar el recibo:\n${mensajeError}\n\nVerifica que la API Key esté configurada en Vercel y que la imagen sea clara.`);
       setScanLoading(false);
-      setShowScanModal(false);
+      // Mantener modal abierto para que el usuario pueda reintentar
     }
 
     event.target.value = '';
@@ -302,7 +311,7 @@ Si hay un total general, ignóralo y solo extrae los items individuales. Categor
         return;
       }
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
